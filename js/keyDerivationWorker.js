@@ -1,6 +1,7 @@
 // keyDerivationWorker.js
 
 // Import the libsodium library into the worker.
+console.log("Worker: Attempting to load sodium.js...");
 importScripts('sodium.js');
 
 // Wait for sodium to be fully initialized.

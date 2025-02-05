@@ -125,10 +125,10 @@
   // ===============================
   // Key Derivation via Web Worker (Argon2id)
   // ===============================
-  function argon2idWorker(password, saltStr) {
+  function deriveKeyArgon2idWorker(password, saltStr) {
     return new Promise((resolve, reject) => {
       // Create the worker. Ensure the path to keyDerivationWorker.js is correct.
-      const worker = new Worker('js/argon2id_worker.js');
+      const worker = new Worker('keyDerivationWorker.js');
 
       worker.onmessage = function (e) {
         if (e.data.error) {
@@ -204,7 +204,7 @@
     // Generate a random salt string of length 32.
     const argon2SaltStr = generateRandomSaltString();
     // Derive a key from the password using our worker.
-    const passWrapKey = await argon2idWorker(password, argon2SaltStr);
+    const passWrapKey = await deriveKeyArgon2idWorker(password, argon2SaltStr);
     const { nonce: passWrapNonce, ciphertext: passWrapped } = chacha20Poly1305Encrypt(passWrapKey, sessionKey);
 
     // 4. Device Wrap:
@@ -293,7 +293,7 @@
     let passSessionKey;
     try {
       // Use the worker-based derivation for consistency.
-      const passWrapKey = await argon2idWorker(password, argon2SaltStr);
+      const passWrapKey = await deriveKeyArgon2idWorker(password, argon2SaltStr);
       passSessionKey = chacha20Poly1305Decrypt(passWrapKey, passWrapNonce, passWrapped);
     } catch (e) {
       throw new Error("Password-based decryption failed. Incorrect password or corrupted data.");

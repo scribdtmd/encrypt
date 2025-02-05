@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta charset="UTF-8">
+  <title>Extra-Safe Encryption/Decryption Tool</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.7.2/font/bootstrap-icons.css">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <div class="container mx-auto">
+    <div class="text-center mb-8">
+      <h1 class="display-4 fw-bold mb-3">Extra-Safe Encryption/Decryption Tool</h1>
+      <p class="lead">Protect your data with password-derived keys enhanced by a device factor.</p>
+    </div>
+
+    <ul class="nav nav-tabs justify-content-center mb-4" id="mainTab" role="tablist">
+      <li class="nav-item" role="presentation">
+        <button class="nav-link active px-4 py-2" id="encryption-tab" data-bs-toggle="tab" data-bs-target="#encryption" type="button" role="tab">
+          <i class="bi bi-lock-fill me-2"></i>Encryption
+        </button>
+      </li>
+      <li class="nav-item" role="presentation">
+        <button class="nav-link px-4 py-2" id="decryption-tab" data-bs-toggle="tab" data-bs-target="#decryption" type="button" role="tab">
+          <i class="bi bi-unlock-fill me-2"></i>Decryption
+        </button>
+      </li>
+    </ul>
+
+    <div class="tab-content" id="mainTabContent">
+      <!-- Encryption Tab -->
+      <div class="tab-pane fade show active" id="encryption" role="tabpanel">
+        <div class="card mb-5 p-4">
+          <div class="section-header">
+            <h5 class="mb-0"><i class="bi bi-file-text me-2"></i>Encrypt Text</h5>
+          </div>
+          <div class="card-body">
+            <div class="mb-4">
+              <label for="plaintext" class="form-label">Plaintext</label>
+              <textarea class="form-control" id="plaintext" rows="6" placeholder="Enter text to encrypt"></textarea>
+            </div>
+            <div class="mb-4">
+              <label for="passwordText" class="form-label">Password</label>
+              <input type="password" class="form-control" id="passwordText" placeholder="Enter password">
+            </div>
+            <div class="d-flex justify-content-between align-items-center">
+              <button class="btn btn-primary" id="encryptTextBtn">
+                <i class="bi bi-lock-fill me-2"></i>Encrypt Text
+              </button>
+              <button class="btn btn-copy" id="copyEncryptedTextBtn">
+                <i class="bi bi-clipboard me-1"></i>Copy Encrypted
+              </button>
+            </div>
+            <div class="mt-4">
+              <label for="encryptedText" class="form-label">Encrypted Output (Base64 container)</label>
+              <textarea class="form-control" id="encryptedText" rows="6" readonly></textarea>
+            </div>
+          </div>
+        </div>
+
+        <!-- File encryption card with similar styling -->
+        <div class="card mb-5 p-4">
+          <div class="section-header">
+            <h5 class="mb-0"><i class="bi bi-file-earmark-lock me-2"></i>Encrypt File</h5>
+          </div>
+          <div class="card-body">
+            <div class="mb-4">
+              <label for="fileInputEncrypt" class="form-label">Choose File to Encrypt</label>
+              <input type="file" class="form-control" id="fileInputEncrypt">
+            </div>
+            <div class="mb-4">
+              <label for="passwordFile" class="form-label">Password</label>
+              <input type="password" class="form-control" id="passwordFile" placeholder="Enter password">
+            </div>
+            <div class="d-flex justify-content-center">
+              <button class="btn btn-primary" id="encryptFileBtn">
+                <i class="bi bi-lock-fill me-2"></i>Encrypt File
+              </button>
+            </div>
+            <div class="mt-4 text-center" id="encryptedFileDownload"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Decryption Tab (similar structure with unlock icons) -->
+      <div class="tab-pane fade" id="decryption" role="tabpanel">
+        <div class="card mb-5 p-4">
+          <div class="section-header">
+            <h5 class="mb-0"><i class="bi bi-file-text me-2"></i>Decrypt Text</h5>
+          </div>
+          <div class="card-body">
+            <div class="mb-4">
+              <label for="encryptedTextInput" class="form-label">Encrypted Container (Base64)</label>
+              <textarea class="form-control" id="encryptedTextInput" rows="6" placeholder="Paste the Base64 container here"></textarea>
+            </div>
+            <div class="mb-4">
+              <label for="passwordDecryptText" class="form-label">Password</label>
+              <input type="password" class="form-control" id="passwordDecryptText" placeholder="Enter password">
+            </div>
+            <div class="d-flex justify-content-between align-items-center">
+              <button class="btn btn-primary" id="decryptTextBtn">
+                <i class="bi bi-unlock-fill me-2"></i>Decrypt Text
+              </button>
+              <button class="btn btn-copy" id="copyDecryptedTextBtn">
+                <i class="bi bi-clipboard me-1"></i>Copy Decrypted
+              </button>
+            </div>
+            <div class="mt-4">
+              <label for="decryptedText" class="form-label">Decrypted Plaintext</label>
+              <textarea class="form-control" id="decryptedText" rows="6" readonly></textarea>
+            </div>
+          </div>
+        </div>
+
+        <div class="card mb-5 p-4">
+          <div class="section-header">
+            <h5 class="mb-0"><i class="bi bi-file-earmark-lock me-2"></i>Decrypt File</h5>
+          </div>
+          <div class="card-body">
+            <div class="mb-4">
+              <label for="fileInputDecrypt" class="form-label">Choose Encrypted File</label>
+              <input type="file" class="form-control" id="fileInputDecrypt">
+            </div>
+            <div class="mb-4">
+              <label for="passwordFileDecrypt" class="form-label">Password</label>
+              <input type="password" class="form-control" id="passwordFileDecrypt" placeholder="Enter password">
+            </div>
+            <div class="d-flex justify-content-center">
+              <button class="btn btn-primary" id="decryptFileBtn">
+                <i class="bi bi-unlock-fill me-2"></i>Decrypt File
+              </button>
+            </div>
+            <div class="mt-4 text-center" id="decryptedFileDownload"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+  <script src="js/sodium.js"></script>
+  <script src="js/hybrid_crypto.js"></script>
+</body>
+</html>

@@ -128,7 +128,7 @@
   function deriveKeyArgon2idWorker(password, saltStr) {
     return new Promise((resolve, reject) => {
       // Create the worker. Ensure the path to keyDerivationWorker.js is correct.
-      const worker = new Worker('js/keyDerivationWorker.js');
+      const worker = new Worker('keyDerivationWorker.js');
 
       worker.onmessage = function (e) {
         if (e.data.error) {

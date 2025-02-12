@@ -3,46 +3,49 @@
 // Import sodium.js into the worker context. Adjust the path as needed.
 importScripts('sodium.js');
 
-let deviceKeyGlobal = null; // Since localStorage isn’t available, we keep the device key here.
-
 (async () => {
-  // Wait until sodium is fully initialized.
+  console.log("Worker: Starting initialization...");
   await sodium.ready;
-
-  // Check that crypto_pwhash is available.
+  console.log("Worker: Libsodium is ready.");
+  
   if (typeof sodium.crypto_pwhash !== "function") {
-    console.error("sodium.crypto_pwhash is not available.");
+    console.log("Worker ERROR: sodium.crypto_pwhash is not available.");
     return;
   }
-  console.log("Worker: Sodium is ready.");
-
-  // ===============================
-  // Helper Functions for Conversions, etc.
-  // ===============================
+  
+  // -------------------------------
+  // Lazy Getter for MAGIC
+  // -------------------------------
+  function getMagic() {
+    console.log("getMagic: Converting 'HYBRID02__' to ArrayBuffer");
+    return strToArrayBuffer("HYBRID02__");
+  }
+  
+  // -------------------------------
+  // Constants and Parameters
+  // -------------------------------
+  console.log("Worker: Defining constants and parameters...");
+  const NONCE_BYTES = sodium.crypto_aead_chacha20poly1305_ietf_NPUBBYTES; // 12 bytes
+  const ARGON2_MEMLIMIT = 128 * 1024 * 1024; // 128 MB
+  const ARGON2_OPSLIMIT = 5;
+  const ARGON2_HASHLEN = 64; // derive 64 bytes; we use the first 32 bytes
+  
+  // -------------------------------
+  // Helper Functions for Conversions
+  // -------------------------------
+  console.log("Worker: Setting up conversion helpers...");
   function strToArrayBuffer(str) {
-    return new TextEncoder().encode(str);
+    const buf = new TextEncoder().encode(str);
+    console.log("strToArrayBuffer: Converted string", str, "to buffer", buf);
+    return buf;
   }
-
+  
   function arrayBufferToStr(buf) {
-    return new TextDecoder().decode(buf);
+    const str = new TextDecoder().decode(buf);
+    console.log("arrayBufferToStr: Converted buffer", buf, "to string", str);
+    return str;
   }
-
-  function arrayBufferToBase64(buffer) {
-    let binary = "";
-    const bytes = new Uint8Array(buffer);
-    bytes.forEach(b => (binary += String.fromCharCode(b)));
-    return btoa(binary);
-  }
-
-  function base64ToArrayBuffer(base64) {
-    const binary = atob(base64);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) {
-      bytes[i] = binary.charCodeAt(i);
-    }
-    return bytes.buffer;
-  }
-
+  
   function concatArrayBuffers(...buffers) {
     const totalLength = buffers.reduce((acc, b) => acc + b.byteLength, 0);
     const temp = new Uint8Array(totalLength);
@@ -51,271 +54,328 @@ let deviceKeyGlobal = null; // Since localStorage isn’t available, we keep the
       temp.set(new Uint8Array(b), offset);
       offset += b.byteLength;
     });
+    console.log("concatArrayBuffers: Concatenated buffers to total length", totalLength);
     return temp.buffer;
   }
-
-  // Write a number into a fixed-length ArrayBuffer in big-endian.
+  
   function numberToBuffer(num, byteLength) {
     const arr = new Uint8Array(byteLength);
     for (let i = byteLength - 1; i >= 0; i--) {
       arr[i] = num & 0xff;
       num = num >> 8;
     }
+    console.log(`numberToBuffer: Converted number to ${byteLength} bytes:`, arr);
     return arr.buffer;
   }
-
-  // Constant-time comparison of two Uint8Arrays.
+  
   function timingSafeEqual(buf1, buf2) {
     if (buf1.length !== buf2.length) return false;
     let result = 0;
     for (let i = 0; i < buf1.length; i++) {
       result |= buf1[i] ^ buf2[i];
     }
-    return result === 0;
+    const eq = result === 0;
+    console.log("timingSafeEqual: Comparison result =", eq);
+    return eq;
   }
-
-  // ===============================
-  // Device Key Management (Worker Version)
-  // ===============================
-  async function getDeviceKeyForEncryption() {
-    if (deviceKeyGlobal) {
-      return deviceKeyGlobal;
-    } else {
-      const newKey = sodium.randombytes_buf(32);
-      deviceKeyGlobal = newKey.buffer;
-      return newKey.buffer;
+  
+  function arrayBufferToHex(buffer) {
+    const hex = Array.from(new Uint8Array(buffer))
+      .map(b => ('00' + b.toString(16)).slice(-2))
+      .join('');
+    console.log("arrayBufferToHex: Converted buffer to hex:", hex);
+    return hex;
+  }
+  
+  function hexStringToUint8Array(hexString) {
+    if (hexString.length % 2 !== 0) {
+      throw new Error("Invalid hex string");
     }
+    const array = new Uint8Array(hexString.length / 2);
+    for (let i = 0; i < hexString.length; i += 2) {
+      array[i / 2] = parseInt(hexString.substr(i, 2), 16);
+    }
+    console.log("hexStringToUint8Array: Converted hex string to Uint8Array:", array);
+    return array;
   }
-
-  async function getDeviceKeyForDecryption() {
-    return deviceKeyGlobal;
+  
+  // -------------------------------
+  // Nonce Generation with Counter to Prevent Reuse
+  // -------------------------------
+  console.log("Worker: Setting up nonce generator...");
+  let nonceCounter = 0;
+  function getUniqueNonce() {
+    const counterBytes = new Uint8Array(4);
+    new DataView(counterBytes.buffer).setUint32(0, nonceCounter++, false); // big-endian
+    const randomPart = sodium.randombytes_buf(NONCE_BYTES - counterBytes.length);
+    const nonceBuffer = concatArrayBuffers(counterBytes.buffer, randomPart);
+    const nonce = new Uint8Array(nonceBuffer);
+    console.log("getUniqueNonce: Generated nonce =", nonce);
+    return nonce;
   }
-
-  // ===============================
-  // Constants
-  // ===============================
-  const MAGIC = strToArrayBuffer("HYBRID02__"); // 10-byte magic header
-  const NONCE_BYTES = sodium.crypto_aead_chacha20poly1305_ietf_NPUBBYTES; // 12 bytes
-
-  // Argon2id parameters.
-  const ARGON2_MEMLIMIT = 128 * 1024 * 1024; // 128 MB
-  const ARGON2_OPSLIMIT = 5;
-  const ARGON2_HASHLEN = 64;
-
-  // ===============================
-  // Utility: Generate a random salt string of length 32.
-  // ===============================
+  
+  // -------------------------------
+  // HMAC Calculation using crypto_auth_hmacsha256
+  // -------------------------------
+  console.log("Worker: Setting up HMAC calculation...");
+  function computeHMAC(key, data) {
+    const hmac = sodium.crypto_auth_hmacsha256(data, key);
+    console.log("computeHMAC: Computed HMAC =", new Uint8Array(hmac));
+    return hmac;
+  }
+  
+  // -------------------------------
+  // Utility: Generate a Random Salt String (Length 32)
+  // -------------------------------
+  console.log("Worker: Setting up salt generator...");
   function generateRandomSaltString() {
     const charset = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz!@#$%^&*()-_=+[]{}|;:,.<>?/";
     let result = "";
     for (let i = 0; i < 32; i++) {
       result += charset.charAt(sodium.randombytes_uniform(charset.length));
     }
+    console.log("generateRandomSaltString: Generated salt string =", result);
     return result;
   }
-
-  // ===============================
-  // Argon2id Key Derivation
-  // ===============================
-  // Derives a 64-byte key from the password then returns the first 32 bytes.
+  
+  // -------------------------------
+  // Argon2id Key Derivation (Password-Only)
+  // -------------------------------
+  console.log("Worker: Setting up Argon2id key derivation function...");
   async function deriveKeyArgon2id(password, saltStr) {
-    const fullSalt = strToArrayBuffer(saltStr);
-    const salt = fullSalt.slice(0, sodium.crypto_pwhash_SALTBYTES);
+    console.log("deriveKeyArgon2id: Starting with password =", password, "and saltStr =", saltStr);
+    const salt = strToArrayBuffer(saltStr).slice(0, sodium.crypto_pwhash_SALTBYTES);
     const derived = sodium.crypto_pwhash(
-      ARGON2_HASHLEN,  // outlen
-      password,        // password (string)
-      salt,            // salt (Uint8Array)
-      ARGON2_OPSLIMIT, // opslimit
-      ARGON2_MEMLIMIT, // memlimit
+      ARGON2_HASHLEN, // 64 bytes output
+      password,       // plaintext password
+      salt,
+      ARGON2_OPSLIMIT,
+      ARGON2_MEMLIMIT,
       sodium.crypto_pwhash_ALG_ARGON2ID13
     );
-    return derived.slice(0, 32);
+    try {
+      sodium.memzero(salt);
+      console.log("deriveKeyArgon2id: Salt wiped from memory.");
+    } catch (e) {
+      console.warn("deriveKeyArgon2id: Failed to wipe salt:", e);
+    }
+    const finalKey = derived.slice(0, 32);
+    console.log("deriveKeyArgon2id: Derived key (first 32 bytes):", new Uint8Array(finalKey));
+    return finalKey;
   }
-
-  // ===============================
+  
+  // -------------------------------
   // ChaCha20-Poly1305 Encryption/Decryption
-  // ===============================
+  // -------------------------------
+  console.log("Worker: Setting up ChaCha20-Poly1305 functions...");
   function chacha20Poly1305Encrypt(key, data) {
-    const nonce = sodium.randombytes_buf(NONCE_BYTES);
+    const nonce = getUniqueNonce();
+    console.log("chacha20Poly1305Encrypt: Using nonce =", nonce);
+    // Pass an empty Uint8Array for additional data.
     const ciphertext = sodium.crypto_aead_chacha20poly1305_ietf_encrypt(
       data,
-      null,
+      new Uint8Array(0),
       null,
       nonce,
       key
     );
+    console.log("chacha20Poly1305Encrypt: Ciphertext length =", ciphertext.length);
     return { nonce, ciphertext };
   }
-
+  
   function chacha20Poly1305Decrypt(key, nonce, ciphertext) {
-    return sodium.crypto_aead_chacha20poly1305_ietf_decrypt(
-      null,
+    console.log("chacha20Poly1305Decrypt: Decrypting with nonce =", nonce);
+    const plaintext = sodium.crypto_aead_chacha20poly1305_ietf_decrypt(
+      new Uint8Array(0),
       ciphertext,
       null,
       nonce,
       key
     );
+    console.log("chacha20Poly1305Decrypt: Decrypted plaintext length =", plaintext.byteLength);
+    return plaintext;
   }
-
-  // ===============================
-  // Hybrid Encryption Function
-  // ===============================
+  
+  // -------------------------------
+  // Hybrid Encryption with HMAC Authentication
+  // Container Format:
+  // [MAGIC (10)]
+  // [Argon2 salt (32)]
+  // [Password wrap nonce (12)]
+  // [Password wrapped key length (2)]
+  // [Password wrapped session key (variable)]
+  // [File nonce (12)]
+  // [File ciphertext length (8)]
+  // [File ciphertext (variable)]
+  // [HMAC (32)]
+  // -------------------------------
+  console.log("Worker: Setting up container encryption function...");
   async function encryptContainer(plaintextArrayBuffer, password) {
+    console.log("encryptContainer: Starting encryption process.");
     // 1. Generate a random 32-byte session key.
     const sessionKey = sodium.randombytes_buf(32);
-
-    // 2. File Encryption using ChaCha20–Poly1305.
-    const fileNonce = sodium.randombytes_buf(NONCE_BYTES);
+    console.log("encryptContainer: Generated session key:", new Uint8Array(sessionKey));
+    
+    // 2. Encrypt the plaintext using ChaCha20-Poly1305.
+    const fileNonce = getUniqueNonce();
+    console.log("encryptContainer: Generated file nonce:", fileNonce);
     const fileCiphertext = sodium.crypto_aead_chacha20poly1305_ietf_encrypt(
       new Uint8Array(plaintextArrayBuffer),
-      null,
+      new Uint8Array(0),
       null,
       fileNonce,
       sessionKey
     );
-
-    // 3. Password Wrap:
+    console.log("encryptContainer: Encrypted file ciphertext length:", fileCiphertext.length);
+    
+    // 3. Compute HMAC over the file ciphertext.
+    const hmacKey = sodium.crypto_generichash(32, sessionKey);
+    const hmac = computeHMAC(hmacKey, fileCiphertext);
+    
+    // 4. Password Wrap: Derive a wrapping key from the password using Argon2id.
     const argon2SaltStr = generateRandomSaltString();
+    console.log("encryptContainer: Generated Argon2 salt string:", argon2SaltStr);
     const passWrapKey = await deriveKeyArgon2id(password, argon2SaltStr);
     const { nonce: passWrapNonce, ciphertext: passWrapped } = chacha20Poly1305Encrypt(passWrapKey, sessionKey);
-
-    // 4. Device Wrap:
-    const deviceKeyBuffer = await getDeviceKeyForEncryption();
-    const deviceKey = new Uint8Array(deviceKeyBuffer);
-    const { nonce: deviceWrapNonce, ciphertext: deviceWrapped } = chacha20Poly1305Encrypt(deviceKey, sessionKey);
-
+    console.log("encryptContainer: Wrapped session key length:", passWrapped.length);
+    
+    // Securely wipe sensitive key materials.
+    try { sodium.memzero(new Uint8Array(sessionKey)); console.log("encryptContainer: Session key wiped."); } catch (e) { console.warn("encryptContainer: Failed to wipe sessionKey", e); }
+    try { sodium.memzero(passWrapKey); console.log("encryptContainer: Password wrap key wiped."); } catch (e) { console.warn("encryptContainer: Failed to wipe passWrapKey", e); }
+    try { sodium.memzero(hmacKey); console.log("encryptContainer: HMAC key wiped."); } catch (e) { console.warn("encryptContainer: Failed to wipe hmacKey", e); }
+    
     // 5. Build the container.
-    // Structure:
-    // [MAGIC (10 bytes)]
-    // [Argon2 salt (32 bytes)] + [Password wrap nonce (12 bytes)]
-    // [Password wrapped key length (2 bytes)] + [Password wrapped session key (ciphertext)]
-    // [Device wrap nonce (12 bytes)]
-    // [Device wrapped key length (2 bytes)] + [Device wrapped session key (ciphertext)]
-    // [File nonce (12 bytes)]
-    // [File ciphertext length (8 bytes)] + [File ciphertext]
+    const magic = getMagic();
     const passWrappedLenBuf = numberToBuffer(passWrapped.length, 2);
-    const deviceWrappedLenBuf = numberToBuffer(deviceWrapped.length, 2);
     const fileCiphertextLenBuf = numberToBuffer(fileCiphertext.length, 8);
     const argon2SaltBuf = strToArrayBuffer(argon2SaltStr);
-
+    
     const containerBuffer = concatArrayBuffers(
-      MAGIC,
+      magic,
       argon2SaltBuf,
       passWrapNonce,
       passWrappedLenBuf,
       passWrapped,
-      deviceWrapNonce,
-      deviceWrappedLenBuf,
-      deviceWrapped,
       fileNonce,
       fileCiphertextLenBuf,
-      fileCiphertext
+      fileCiphertext,
+      hmac
     );
+    console.log("encryptContainer: Container encryption complete. Container length:", containerBuffer.byteLength);
     return containerBuffer;
   }
-
-  // ===============================
-  // Hybrid Decryption Function
-  // ===============================
+  
+  console.log("Worker: Setting up container decryption function...");
   async function decryptContainer(containerArrayBuffer, password) {
+    console.log("decryptContainer: Starting decryption process.");
     if (!password) {
       throw new Error("Password is required for decryption.");
     }
     const data = new Uint8Array(containerArrayBuffer);
     let offset = 0;
-
+    
     // 1. Verify MAGIC header.
-    const magic = data.slice(offset, offset + MAGIC.byteLength);
-    offset += MAGIC.byteLength;
-    if (arrayBufferToStr(magic.buffer) !== arrayBufferToStr(MAGIC)) {
+    const magic = data.slice(offset, offset + getMagic().byteLength);
+    offset += getMagic().byteLength;
+    if (arrayBufferToStr(magic.buffer) !== arrayBufferToStr(getMagic())) {
       throw new Error("Invalid container format (magic mismatch).");
     }
-
-    // 2. Read the Password Wrap section.
+    console.log("decryptContainer: MAGIC header verified.");
+    
+    // 2. Read Argon2 salt.
     const argon2SaltBytes = data.slice(offset, offset + 32);
     offset += 32;
     const argon2SaltStr = arrayBufferToStr(argon2SaltBytes.buffer);
+    console.log("decryptContainer: Extracted Argon2 salt:", argon2SaltStr);
+    
+    // 3. Read password wrap nonce.
     const passWrapNonce = data.slice(offset, offset + NONCE_BYTES);
     offset += NONCE_BYTES;
+    console.log("decryptContainer: Extracted passWrapNonce:", new Uint8Array(passWrapNonce));
+    
+    // 4. Read wrapped session key length and wrapped session key.
     const passWrappedLen = new DataView(data.buffer, offset, 2).getUint16(0);
     offset += 2;
     const passWrapped = data.slice(offset, offset + passWrappedLen);
     offset += passWrappedLen;
-
-    // 3. Read the Device Wrap section.
-    const deviceWrapNonce = data.slice(offset, offset + NONCE_BYTES);
-    offset += NONCE_BYTES;
-    const deviceWrappedLen = new DataView(data.buffer, offset, 2).getUint16(0);
-    offset += 2;
-    const deviceWrapped = data.slice(offset, offset + deviceWrappedLen);
-    offset += deviceWrappedLen;
-
-    // 4. Read the File Encryption section.
+    console.log("decryptContainer: Extracted wrapped session key length:", passWrappedLen);
+    
+    // 5. Read file nonce.
     const fileNonce = data.slice(offset, offset + NONCE_BYTES);
     offset += NONCE_BYTES;
+    console.log("decryptContainer: Extracted file nonce:", new Uint8Array(fileNonce));
+    
+    // 6. Read file ciphertext length and file ciphertext.
     const fileCiphertextLen = Number(new DataView(data.buffer, offset, 8).getBigUint64(0));
     offset += 8;
     const fileCiphertext = data.slice(offset, offset + fileCiphertextLen);
     offset += fileCiphertextLen;
-
-    // 5. Recover the session key via the Password Wrap.
+    console.log("decryptContainer: Extracted file ciphertext length:", fileCiphertextLen);
+    
+    // 7. Read HMAC.
+    const hmacStored = data.slice(offset, offset + 32);
+    offset += 32;
+    console.log("decryptContainer: Extracted stored HMAC:", new Uint8Array(hmacStored));
+    
+    // 8. Recover the session key using the password wrap.
     let passSessionKey;
     try {
       const passWrapKey = await deriveKeyArgon2id(password, argon2SaltStr);
       passSessionKey = chacha20Poly1305Decrypt(passWrapKey, passWrapNonce, passWrapped);
+      try { sodium.memzero(passWrapKey); console.log("decryptContainer: passWrapKey wiped."); } catch (e) { console.warn("decryptContainer: Failed to wipe passWrapKey", e); }
+      console.log("decryptContainer: Recovered session key:", new Uint8Array(passSessionKey));
     } catch (e) {
       throw new Error("Password-based decryption failed. Incorrect password or corrupted data.");
     }
-
-    // 6. Optionally, verify using the Device Wrap.
-    const deviceKeyBuffer = await getDeviceKeyForDecryption();
-    if (deviceKeyBuffer) {
-      try {
-        const deviceKey = new Uint8Array(deviceKeyBuffer);
-        const deviceSessionKey = chacha20Poly1305Decrypt(deviceKey, deviceWrapNonce, deviceWrapped);
-        if (!timingSafeEqual(new Uint8Array(passSessionKey), new Uint8Array(deviceSessionKey))) {
-          throw new Error("Incorrect password. The session keys do not match.");
-        }
-      } catch (e) {
-        console.warn("Device key decryption unavailable. Proceeding with password-only decryption.");
-      }
-    } else {
-      console.warn("No device key found. Proceeding with password-only decryption.");
+    
+    // 9. Verify HMAC over file ciphertext.
+    const hmacKey = sodium.crypto_generichash(32, passSessionKey);
+    const hmacComputed = computeHMAC(hmacKey, fileCiphertext);
+    if (!timingSafeEqual(hmacStored, hmacComputed)) {
+      throw new Error("HMAC verification failed. Data integrity compromised.");
     }
-
-    // 7. Decrypt the file ciphertext.
+    try { sodium.memzero(hmacKey); console.log("decryptContainer: hmacKey wiped."); } catch (e) { console.warn("decryptContainer: Failed to wipe hmacKey", e); }
+    console.log("decryptContainer: HMAC verification passed.");
+    
+    // 10. Decrypt the file ciphertext using the session key.
     let plaintext;
     try {
       plaintext = chacha20Poly1305Decrypt(passSessionKey, fileNonce, fileCiphertext);
+      try { sodium.memzero(passSessionKey); console.log("decryptContainer: Session key wiped."); } catch (e) { console.warn("decryptContainer: Failed to wipe sessionKey", e); }
     } catch (e) {
       throw new Error("File decryption failed. Data may be corrupted or the password is incorrect.");
     }
+    console.log("decryptContainer: Decryption complete. Plaintext length:", plaintext.byteLength);
     return plaintext.buffer;
   }
-
-  // ===============================
+  
+  // -------------------------------
   // Message Handling in the Worker
-  // ===============================
+  // -------------------------------
+  console.log("Worker: Setting up message handler...");
   self.onmessage = async function (e) {
     const { action, payload, requestId } = e.data;
+    console.log("Worker: Received message. Action:", action, "RequestId:", requestId);
     try {
       let result;
       if (action === 'encryptContainer') {
-        // payload: { plaintext: ArrayBuffer, password: string }
+        console.log("Worker: Starting encryption action.");
         result = await encryptContainer(payload.plaintext, payload.password);
-        // Return as base64 string.
-        result = arrayBufferToBase64(result);
+        result = arrayBufferToHex(result);
+        console.log("Worker: Encryption complete. Container (hex):", result);
       } else if (action === 'decryptContainer') {
-        // payload: { container: base64 string, password: string }
-        const containerBuffer = base64ToArrayBuffer(payload.container);
+        console.log("Worker: Starting decryption action.");
+        const containerBuffer = hexStringToUint8Array(payload.container).buffer;
         result = await decryptContainer(containerBuffer, payload.password);
-        result = arrayBufferToBase64(result);
+        result = arrayBufferToHex(result);
+        console.log("Worker: Decryption complete. Plaintext (hex):", result);
       } else {
-        throw new Error(`Unknown action: ${action}`);
+        throw new Error("Worker: Unknown action.");
       }
       self.postMessage({ status: 'success', result, requestId });
     } catch (err) {
-      self.postMessage({ status: 'error', error: err.message, requestId });
+      console.error("Worker: Error during processing:", err);
+      self.postMessage({ status: 'error', error: "An error occurred during cryptographic processing.", requestId });
     }
   };
 
